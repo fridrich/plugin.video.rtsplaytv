@@ -446,10 +446,17 @@ def run():
         )
     elif mode == 50:
         import os
-        addon_path = RTSPlayTV().real_settings.getAddonInfo("path")
+        rts = RTSPlayTV()
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(rts.real_settings)
+        cookies_path = auth.session_file
+        addon_path = rts.real_settings.getAddonInfo("path")
         monitor_script = os.path.join(addon_path, "resources", "lib", "monitor.py")
-        xbmc.executebuiltin(f'RunScript("{monitor_script}", "{name}", "{title}")')
-        RTSPlayTV().player.play_video(name, title=title)
+        escaped_name = name.replace('"', '\\"').replace("'", "\\'") if name else ""
+        escaped_title = title.replace('"', '\\"').replace("'", "\\'") if title else "Video"
+        escaped_cookies_path = cookies_path.replace('"', '\\"').replace("'", "\\'") if cookies_path else ""
+        xbmc.executebuiltin(f'RunScript("{monitor_script}", "{escaped_name}", "{escaped_title}", "{escaped_cookies_path}")')
+        rts.player.play_video(name, title=title)
     elif mode == "continue_watching":
         import time
         import requests
@@ -481,11 +488,15 @@ def run():
                             break
                         urn = item.get("item_id")
                         resume_seconds = item.get("last_playback_position")
-                        if not urn or "video" not in urn or resume_seconds is None:
+                        if not urn or resume_seconds is None:
                             continue
 
-                        # Fetch the metadata
-                        json_url = f"https://il.srgssr.ch/integrationlayer/2.0/mediaComposition/byUrn/{urn}.json"
+                        # Fetch the metadata (supports both full URNs with colon and raw IDs)
+                        if ":" in urn:
+                            json_url = f"https://il.srgssr.ch/integrationlayer/2.0/mediaComposition/byUrn/{urn}.json"
+                        else:
+                            json_url = f"https://il.srgssr.ch/integrationlayer/2.0/rts/mediaComposition/video/{urn}.json"
+
                         try:
                             content = rts.open_url(json_url, use_cache=True, notify_on_error=False)
                             if not content:

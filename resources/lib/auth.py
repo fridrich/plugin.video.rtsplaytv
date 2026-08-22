@@ -99,9 +99,14 @@ class RTSAuth:
         if os.path.exists(self.session_file):
             try:
                 cookie_jar.load(ignore_discard=True, ignore_expires=True)
-                return cookie_jar
+                if len(list(cookie_jar)) > 0:
+                    return cookie_jar
+                else:
+                    log_msg("Cookie jar is empty.", xbmc.LOGDEBUG if KODI_AVAILABLE else None)
             except Exception as e:
                 log_msg(f"Error reading session cache: {e}", xbmc.LOGDEBUG if KODI_AVAILABLE else None)
+        else:
+            log_msg(f"Cookie jar file not found at: {self.session_file}", xbmc.LOGDEBUG if KODI_AVAILABLE else None)
         return None
 
     def _login_with_credentials(self, email, password):
