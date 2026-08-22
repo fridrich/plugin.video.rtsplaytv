@@ -125,3 +125,23 @@ msgstr "Sports en direct"
 msgctxt "#30102"
 msgid "Les autres directs"
 msgstr "Les autres directs"
+
+msgctxt "#30080"
+msgid "Email"
+msgstr "Adresse courriel"
+
+msgctxt "#30081"
+msgid "Password"
+msgstr "Mot de passe"
+
+msgctxt "#30082"
+msgid "Authenticate / Log in"
+msgstr "S'authentifier / Connexion"
+
+msgctxt "#30083"
+msgid "Login successful."
+msgstr "Connexion réussie."
+
+msgctxt "#30084"
+msgid "Login failed. Check your email and password."
+msgstr "Échec de connexion. Vérifiez votre adresse courriel et votre mot de passe."

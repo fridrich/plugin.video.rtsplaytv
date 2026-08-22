@@ -352,7 +352,11 @@ def run():
     except Exception:
         name = None
     try:
-        mode = int(params["mode"])
+        mode_val = params.get("mode")
+        if mode_val is not None and mode_val.isdigit():
+            mode = int(mode_val)
+        else:
+            mode = mode_val
     except Exception:
         mode = None
     try:
@@ -439,6 +443,27 @@ def run():
         RTSPlayTV().build_livetv_menu(name)
     elif mode == 1000:
         RTSPlayTV().menu_builder.build_menu_apiv3(name, mode, page, page_hash)
+    elif mode == "login":
+        import os
+        from resources.lib.auth import RTSAuth
+        rts = RTSPlayTV()
+        auth = RTSAuth(rts.real_settings)
+        if os.path.exists(auth.session_file):
+            try:
+                os.remove(auth.session_file)
+            except Exception:
+                pass
+        try:
+            if auth.prompt_credentials_and_login():
+                xbmcgui.Dialog().ok(
+                    ADDON_NAME,
+                    rts.plugin_language(30083) or "Login successful."
+                )
+        except Exception as e:
+            xbmcgui.Dialog().ok(
+                ADDON_NAME,
+                f"{rts.plugin_language(30084) or 'Login failed.'}\nError: {e}"
+            )
 
     xbmcplugin.setContent(int(sys.argv[1]), CONTENT_TYPE)
     xbmcplugin.addSortMethod(int(sys.argv[1]), xbmcplugin.SORT_METHOD_UNSORTED)

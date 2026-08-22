@@ -125,3 +125,23 @@ msgstr "Sports Live"
 msgctxt "#30102"
 msgid "Other Live Streams"
 msgstr "Other Live Streams"
+
+msgctxt "#30080"
+msgid "Email"
+msgstr "Email"
+
+msgctxt "#30081"
+msgid "Password"
+msgstr "Password"
+
+msgctxt "#30082"
+msgid "Authenticate / Log in"
+msgstr "Authenticate / Log in"
+
+msgctxt "#30083"
+msgid "Login successful."
+msgstr "Login successful."
+
+msgctxt "#30084"
+msgid "Login failed. Check your email and password."
+msgstr "Login failed. Check your email and password."
