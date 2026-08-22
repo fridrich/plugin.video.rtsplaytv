@@ -453,6 +453,8 @@ def run():
     elif mode == "continue_watching":
         import time
         import requests
+        import json
+        import re
         rts = RTSPlayTV()
         from resources.lib.auth import RTSAuth
         auth = RTSAuth(rts.real_settings)
@@ -478,10 +480,68 @@ def run():
                         if count >= 30:
                             break
                         urn = item.get("item_id")
-                        if not urn or "video" not in urn:
+                        resume_seconds = item.get("last_playback_position")
+                        if not urn or "video" not in urn or resume_seconds is None:
                             continue
-                        rts.menu_builder.build_episode_menu(urn, include_segments=False)
-                        count += 1
+
+                        # Fetch the metadata
+                        json_url = f"https://il.srgssr.ch/integrationlayer/2.0/mediaComposition/byUrn/{urn}.json"
+                        try:
+                            content = rts.open_url(json_url, use_cache=True, notify_on_error=False)
+                            if not content:
+                                continue
+                            json_response = json.loads(content)
+
+                            chapter_urn = json_response.get("chapterUrn")
+                            chapter_id = chapter_urn.split(":")[-1] if chapter_urn else None
+
+                            json_chapter_list = json_response.get("chapterList") or []
+                            json_chapter = None
+                            for chapter in json_chapter_list:
+                                if chapter.get("id") == chapter_id:
+                                    json_chapter = chapter
+                                    break
+
+                            if not json_chapter:
+                                continue
+
+                            title = json_chapter.get("title") or "Video"
+                            description = json_chapter.get("description") or json_chapter.get("lead")
+                            image_url = json_chapter.get("imageUrl")
+                            if image_url:
+                                image_url = re.sub(r"/\d+x\d+", "", image_url)
+
+                            duration_ms = json_chapter.get("duration")
+                            duration_sec = int(duration_ms // 1000) if isinstance(duration_ms, (int, float)) else 0
+
+                            # Create ListItem
+                            list_item = xbmcgui.ListItem(label=title)
+                            list_item.setInfo(
+                                "video",
+                                {
+                                    "title": title,
+                                    "plot": description,
+                                    "duration": duration_sec,
+                                },
+                            )
+                            if image_url:
+                                list_item.setArt({"thumb": image_url, "poster": image_url, "fanart": image_url})
+
+                            # Set play progress / resume position for Kodi to display progress and prompt for resume
+                            if resume_seconds > 0 and duration_sec > 0:
+                                list_item.setProperty("ResumeTime", str(int(resume_seconds)))
+                                list_item.setProperty("TotalTime", str(int(duration_sec)))
+
+                            list_item.setProperty("inputstream", "inputstream.adaptive")
+                            list_item.setProperty("IsPlayable", "true")
+
+                            # Build the playable URL (mode=50 is the player, passing name=urn and title=title)
+                            play_url = rts.build_url(mode=50, name=urn, title=title)
+
+                            xbmcplugin.addDirectoryItem(int(sys.argv[1]), play_url, list_item, isFolder=False)
+                            count += 1
+                        except Exception as inner_e:
+                            log(f"Failed to process history item {urn}: {inner_e}", xbmc.LOGDEBUG)
             except Exception as e:
                 log(f"Failed to build Continue Watching menu: {e}", xbmc.LOGERROR)
     elif mode == 100:
