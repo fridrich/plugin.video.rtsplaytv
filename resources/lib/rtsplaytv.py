@@ -399,6 +399,17 @@ def run():
         xbmcplugin.addDirectoryItem(
             int(sys.argv[1]), tv_url, tv_list_item, isFolder=True
         )
+
+        # Append Continue Watching if authenticated
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(rts.real_settings)
+        if auth.get_cookies():
+            cw_list_item = xbmcgui.ListItem(label="Continue Watching")
+            cw_list_item.setArt({"icon": rts.icon})
+            cw_url = rts.build_url(mode="continue_watching")
+            xbmcplugin.addDirectoryItem(
+                int(sys.argv[1]), cw_url, cw_list_item, isFolder=True
+            )
     elif mode == 10:
         RTSPlayTV().menu_builder.build_all_shows_menu()
     elif mode == 11:
@@ -434,7 +445,45 @@ def run():
             name, mode, page=page, page_token=page_hash
         )
     elif mode == 50:
+        import os
+        addon_path = RTSPlayTV().real_settings.getAddonInfo("path")
+        monitor_script = os.path.join(addon_path, "resources", "lib", "monitor.py")
+        xbmc.executebuiltin(f'RunScript("{monitor_script}", "{name}", "{title}")')
         RTSPlayTV().player.play_video(name, title=title)
+    elif mode == "continue_watching":
+        import time
+        import requests
+        rts = RTSPlayTV()
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(rts.real_settings)
+        cookies = auth.get_cookies()
+        if cookies:
+            url = "https://profil.rts.ch/api/history/v2"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.rts.ch/"
+            }
+            try:
+                cb = int(time.time() * 1000)
+                res = requests.get(f"{url}?cb={cb}", headers=headers, cookies=cookies, timeout=10)
+                if res.ok:
+                    data = res.json()
+                    items = []
+                    if isinstance(data, list):
+                        items = data
+                    elif isinstance(data, dict):
+                        items = data.get("items") or data.get("history") or data.get("data") or []
+                    count = 0
+                    for item in items:
+                        if count >= 30:
+                            break
+                        urn = item.get("item_id")
+                        if not urn or "video" not in urn:
+                            continue
+                        rts.menu_builder.build_episode_menu(urn, include_segments=False)
+                        count += 1
+            except Exception as e:
+                log(f"Failed to build Continue Watching menu: {e}", xbmc.LOGERROR)
     elif mode == 100:
         RTSPlayTV().menu_builder.build_menu_by_urn(name)
     elif mode == 200:
