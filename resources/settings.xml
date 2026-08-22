@@ -13,6 +13,24 @@
 					<default>false</default>
 					<control type="toggle"/>
 				</setting>
+				<setting id="email" type="string" label="30080" help="">
+					<level>0</level>
+					<default></default>
+					<control type="edit" format="string"/>
+				</setting>
+				<setting id="password" type="string" label="30081" help="">
+					<level>0</level>
+					<default></default>
+					<control type="edit" format="string" option="hidden"/>
+				</setting>
+				<setting id="authenticate" type="action" label="30082" help="">
+					<level>0</level>
+					<data>RunPlugin(plugin://plugin.video.rtsplaytv?mode=login)</data>
+					<constraints>
+						<allowempty>true</allowempty>
+					</constraints>
+					<control type="button" format="action"/>
+				</setting>
 			</group>
 		</category>
 		<category id="Main_Menu" label="30012" help="">
