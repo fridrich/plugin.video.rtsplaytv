@@ -125,11 +125,8 @@ class RTSAuth:
             log_msg("Using standard requests library...")
             session = requests.Session()
 
-        # Load existing cookies if any. Use the plain 2-arg set() form
-        # rather than .update(cookie_jar) -- curl_cffi's Cookies object
-        # only loosely mirrors requests.cookies.RequestsCookieJar, and
-        # .update() accepting a raw http.cookiejar.CookieJar is a
-        # requests-specific extension not guaranteed to exist there.
+        # Plain 2-arg set(), not .update(cookie_jar) -- that's a
+        # requests-specific extension curl_cffi may not have.
         for cookie in cookie_jar:
             session.cookies.set(cookie.name, cookie.value)
 
@@ -175,10 +172,8 @@ class RTSAuth:
 
         res_post = session.post(self.LOGIN_URL, data=data, allow_redirects=True, timeout=15)
 
-        # Plain name-only lookup (no domain= kwarg): that's a
-        # requests-specific RequestsCookieJar extension, not guaranteed
-        # portable to curl_cffi's cookie jar. There's only one cookie with
-        # this name in play here (scoped to .rts.ch), so this is safe.
+        # No domain= kwarg (requests-specific, may not exist on curl_cffi)
+        # -- safe since only one .rts.ch cookie has this name.
         cookies = session.cookies
         sid_cookie = cookies.get("identity.provider.sid")
 
