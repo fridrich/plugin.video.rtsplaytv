@@ -29,6 +29,9 @@ import xbmcgui
 import xbmcaddon
 import xbmcplugin
 import srgssr
+from menus import MenuBuilder
+import utils
+import re
 
 ADDON_ID = "plugin.video.rtsplaytv"
 REAL_SETTINGS = xbmcaddon.Addon(id=ADDON_ID)
@@ -38,11 +41,276 @@ DEBUG = REAL_SETTINGS.getSetting("Enable_Debugging") == "true"
 CONTENT_TYPE = "videos"
 
 
+class RTSMenuBuilder(MenuBuilder):
+    """RTS-specific MenuBuilder that dynamically adds and removes context menu items."""
+
+    def __init__(self, srgssr_instance):
+        MenuBuilder.__init__(self, srgssr_instance)
+        self.play_later_urns = None
+        self.continue_watching_urns = None
+
+    def _load_user_lists(self):
+        if self.play_later_urns is not None:
+            return
+
+        self.play_later_urns = set()
+        self.continue_watching_urns = set()
+
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(self.srgssr.real_settings)
+        cookies = auth.get_cookies()
+        if not cookies:
+            return
+
+        import requests
+        import time
+        # 1. Fetch Play Later Bookmarks
+        try:
+            cb = int(time.time() * 1000)
+            res = requests.get(f"https://profil.rts.ch/api/playlist/v3/watch_later?cb={cb}", cookies=cookies, timeout=5)
+            if res.ok:
+                bookmarks = res.json().get("bookmarks") or []
+                for b in bookmarks:
+                    urn = b.get("itemId") or b.get("item_id")
+                    if urn:
+                        self.play_later_urns.add(urn)
+        except Exception:
+            pass
+
+        # 2. Fetch Continue Watching History
+        try:
+            cb = int(time.time() * 1000)
+            res = requests.get(f"https://profil.rts.ch/api/history/v2?cb={cb}", cookies=cookies, timeout=5)
+            if res.ok:
+                data = res.json()
+                items = data if isinstance(data, list) else (data.get("items") or data.get("history") or [])
+                for item in items:
+                    if item.get("deleted") is True:
+                        continue
+                    urn = item.get("item_id")
+                    if urn:
+                        raw_id = urn.split(":")[-1] if ":" in urn else urn
+                        self.continue_watching_urns.add(raw_id)
+        except Exception:
+            pass
+
+    def build_entry_apiv3(self, data, is_show=False, whitelist_ids=None):
+        urn = data["urn"]
+        self.srgssr.log(f"RTSMenuBuilder.build_entry_apiv3: urn = {urn}")
+        title = utils.try_get(data, "title")
+
+        if utils.try_get(data, "type") == "SCHEDULED_LIVESTREAM":
+            dt = utils.try_get(data, "date")
+            if dt:
+                dt = utils.parse_datetime(dt)
+            if dt:
+                dts = dt.strftime("(%d.%m.%Y, %H:%M)")
+                title = dts + " " + title
+
+        media_id = utils.try_get(data, "id")
+        if whitelist_ids is not None and media_id not in whitelist_ids:
+            return
+        description = utils.try_get(data, "description")
+        lead = utils.try_get(data, "lead")
+        image_url = utils.try_get(data, "imageUrl")
+        poster_image_url = utils.try_get(data, "posterImageUrl")
+        show_image_url = utils.try_get(data, ["show", "imageUrl"])
+        show_poster_image_url = utils.try_get(data, ["show", "posterImageUrl"])
+        duration = utils.try_get(data, "duration", int, default=None)
+        if duration:
+            duration //= 1000
+        date = utils.try_get(data, "date")
+        kodi_date_string = date
+        dto = utils.parse_datetime(date)
+        kodi_date_string = dto.strftime("%Y-%m-%d") if dto else None
+        label = title or urn
+        list_item = xbmcgui.ListItem(label=label)
+        list_item.setInfo(
+            "video",
+            {
+                "title": title,
+                "plot": description or lead,
+                "plotoutline": lead or description,
+                "duration": duration,
+                "aired": kodi_date_string,
+            },
+        )
+        if is_show:
+            poster = (
+                show_poster_image_url
+                or poster_image_url
+                or show_image_url
+                or image_url
+            )
+        else:
+            poster = (
+                image_url
+                or poster_image_url
+                or show_poster_image_url
+                or show_image_url
+            )
+        list_item.setArt(
+            {
+                "thumb": image_url,
+                "poster": poster,
+                "fanart": show_image_url or self.srgssr.fanart,
+                "banner": show_image_url or image_url,
+            }
+        )
+        url = self.srgssr.build_url(mode=100, name=urn)
+        is_folder = True
+
+        # Inject context menus conditionally
+        if "video" in urn:
+            self._load_user_lists()
+            context_items = []
+            from resources.lib.auth import RTSAuth
+            if RTSAuth(self.srgssr.real_settings).get_cookies():
+                if urn in self.play_later_urns:
+                    remove_url = self.srgssr.build_url(mode="remove_from_play_later", name=urn)
+                    context_items.append(("Remove from Play Later", f"RunPlugin('{remove_url}')"))
+                else:
+                    add_url = self.srgssr.build_url(mode="add_to_play_later", name=urn)
+                    context_items.append(("Add to Play Later", f"RunPlugin('{add_url}')"))
+
+                raw_id = urn.split(":")[-1] if ":" in urn else urn
+                if raw_id in self.continue_watching_urns:
+                    clear_url = self.srgssr.build_url(mode="remove_from_continue_watching", name=urn)
+                    context_items.append(("Remove from Continue Watching", f"RunPlugin('{clear_url}')"))
+
+            if context_items:
+                list_item.addContextMenuItems(context_items)
+
+        xbmcplugin.addDirectoryItem(
+            self.handle, url, list_item, isFolder=is_folder
+        )
+
+    def build_entry(
+        self,
+        json_entry,
+        is_folder=False,
+        fanart=None,
+        urn=None,
+        show_image_url=None,
+        show_poster_image_url=None,
+    ):
+        self.srgssr.log("RTSMenuBuilder.build_entry")
+        title = utils.try_get(json_entry, "title")
+        vid = utils.try_get(json_entry, "id")
+        description = utils.try_get(json_entry, "description")
+        lead = utils.try_get(json_entry, "lead")
+        image_url = utils.try_get(json_entry, "imageUrl")
+        poster_image_url = utils.try_get(json_entry, "posterImageUrl")
+        if not urn:
+            urn = utils.try_get(json_entry, "urn")
+
+        if image_url:
+            image_url = re.sub(r"/\d+x\d+", "", image_url)
+
+        duration = utils.try_get(
+            json_entry, "duration", data_type=int, default=None
+        )
+        if duration:
+            duration = duration // 1000
+        else:
+            duration = utils.get_duration(
+                utils.try_get(json_entry, "duration")
+            )
+
+        date_string = utils.try_get(json_entry, "date")
+        dto = utils.parse_datetime(date_string)
+        kodi_date_string = dto.strftime("%Y-%m-%d") if dto else None
+
+        list_item = xbmcgui.ListItem(label=title)
+        list_item.setInfo(
+            "video",
+            {
+                "title": title,
+                "plot": description or lead,
+                "plotoutline": lead,
+                "duration": duration,
+                "aired": kodi_date_string,
+            },
+        )
+
+        if not fanart:
+            fanart = image_url
+
+        poster = (
+            image_url
+            or poster_image_url
+            or show_poster_image_url
+            or show_image_url
+        )
+        list_item.setArt(
+            {
+                "thumb": image_url,
+                "poster": poster,
+                "fanart": show_image_url or fanart,
+                "banner": show_image_url or image_url,
+            }
+        )
+
+        subs = utils.try_get(
+            json_entry, "subtitleList", data_type=list, default=[]
+        )
+        if subs:
+            subtitle_list = [
+                utils.try_get(x, "url")
+                for x in subs
+                if utils.try_get(x, "format") == "VTT"
+            ]
+            if subtitle_list:
+                list_item.setSubtitles(subtitle_list)
+            else:
+                self.srgssr.log(
+                    f"No WEBVTT subtitles found for video id {vid}."
+                )
+
+        name = vid
+
+        if is_folder:
+            list_item.setProperty("IsPlayable", "false")
+            url = self.srgssr.build_url(mode=21, name=name)
+        else:
+            list_item.setProperty("IsPlayable", "true")
+            if urn and "swisstxt" in urn:
+                url = self.srgssr.build_url(mode=50, name=urn)
+            else:
+                url = self.srgssr.build_url(mode=50, name=name)
+
+        if not is_folder:
+            context_urn = urn if urn else f"urn:rts:video:{name}"
+            self._load_user_lists()
+            context_items = []
+            from resources.lib.auth import RTSAuth
+            if RTSAuth(self.srgssr.real_settings).get_cookies():
+                if context_urn in self.play_later_urns:
+                    remove_url = self.srgssr.build_url(mode="remove_from_play_later", name=context_urn)
+                    context_items.append(("Remove from Play Later", f"RunPlugin('{remove_url}')"))
+                else:
+                    add_url = self.srgssr.build_url(mode="add_to_play_later", name=context_urn)
+                    context_items.append(("Add to Play Later", f"RunPlugin('{add_url}')"))
+
+                raw_id = context_urn.split(":")[-1] if ":" in context_urn else context_urn
+                if raw_id in self.continue_watching_urns:
+                    clear_url = self.srgssr.build_url(mode="remove_from_continue_watching", name=context_urn)
+                    context_items.append(("Remove from Continue Watching", f"RunPlugin('{clear_url}')"))
+
+            if context_items:
+                list_item.addContextMenuItems(context_items)
+
+        xbmcplugin.addDirectoryItem(
+            self.handle, url, list_item, isFolder=is_folder
+        )
+
+
 class RTSPlayTV(srgssr.SRGSSR):
     def __init__(self):
         super(RTSPlayTV, self).__init__(
             int(sys.argv[1]), bu="rts", addon_id=ADDON_ID
         )
+        self.menu_builder = RTSMenuBuilder(self)
 
     def build_livetv_menu(self, sub_menu=None):
         """Fetches 24/7 channels and scheduled event livestreams.
@@ -335,7 +603,12 @@ def log(msg, level=xbmc.LOGDEBUG):
 
 
 def get_params():
-    return dict(parse_qsl(sys.argv[2][1:]))
+    if len(sys.argv) >= 3 and sys.argv[2]:
+        query_string = sys.argv[2][1:]
+    else:
+        from urllib.parse import urlparse
+        query_string = urlparse(sys.argv[0]).query
+    return dict(parse_qsl(query_string))
 
 
 def run():
@@ -410,6 +683,13 @@ def run():
             xbmcplugin.addDirectoryItem(
                 int(sys.argv[1]), cw_url, cw_list_item, isFolder=True
             )
+
+            pl_list_item = xbmcgui.ListItem(label="Play Later")
+            pl_list_item.setArt({"icon": rts.icon})
+            pl_url = rts.build_url(mode="play_later")
+            xbmcplugin.addDirectoryItem(
+                int(sys.argv[1]), pl_url, pl_list_item, isFolder=True
+            )
     elif mode == 10:
         RTSPlayTV().menu_builder.build_all_shows_menu()
     elif mode == 11:
@@ -482,20 +762,174 @@ def run():
                         items = data
                     elif isinstance(data, dict):
                         items = data.get("items") or data.get("history") or data.get("data") or []
+                    seen_urns = set()
                     count = 0
                     for item in items:
                         if count >= 30:
                             break
+                        if item.get("deleted") is True:
+                            continue
                         urn = item.get("item_id")
                         resume_seconds = item.get("last_playback_position")
-                        if not urn or resume_seconds is None:
+                        # Strictly require full URN format (containing a colon ':') to filter out old raw-ID runs
+                        if not urn or ":" not in urn or resume_seconds is None:
                             continue
 
-                        # Fetch the metadata (supports both full URNs with colon and raw IDs)
-                        if ":" in urn:
-                            json_url = f"https://il.srgssr.ch/integrationlayer/2.0/mediaComposition/byUrn/{urn}.json"
-                        else:
-                            json_url = f"https://il.srgssr.ch/integrationlayer/2.0/rts/mediaComposition/video/{urn}.json"
+                        # Deduplicate: normalize full URNs to their raw UUID hash for perfect deduplication
+                        raw_id = urn.split(":")[-1] if ":" in urn else urn
+                        if raw_id in seen_urns:
+                            continue
+                        seen_urns.add(raw_id)
+
+                        # Fetch the metadata from the Integration Layer (guaranteed to contain colon)
+                        json_url = f"https://il.srgssr.ch/integrationlayer/2.0/mediaComposition/byUrn/{urn}.json"
+
+                        try:
+                            content = rts.open_url(json_url, use_cache=True, notify_on_error=False)
+                            if not content:
+                                continue
+                            json_response = json.loads(content)
+
+                            chapter_urn = json_response.get("chapterUrn")
+                            chapter_id = chapter_urn.split(":")[-1] if chapter_urn else None
+
+                            json_chapter_list = json_response.get("chapterList") or []
+                            json_chapter = None
+                            for chapter in json_chapter_list:
+                                if chapter.get("id") == chapter_id:
+                                    json_chapter = chapter
+                                    break
+
+                            if not json_chapter:
+                                continue
+
+                            title = json_chapter.get("title") or "Video"
+                            description = json_chapter.get("description") or json_chapter.get("lead")
+                            image_url = json_chapter.get("imageUrl")
+                            if image_url:
+                                image_url = re.sub(r"/\d+x\d+", "", image_url)
+
+                            duration_ms = json_chapter.get("duration")
+                            duration_sec = int(duration_ms // 1000) if isinstance(duration_ms, (int, float)) else 0
+
+                            # Filter out live streams / zero duration items
+                            if duration_sec <= 0:
+                                continue
+
+                            # Filter out accidental plays (less than 60 seconds watched)
+                            if resume_seconds < 60:
+                                continue
+
+                            # Filter out completed videos (more than 90% watched)
+                            if resume_seconds >= duration_sec * 0.9:
+                                continue
+
+                            # Create ListItem
+                            list_item = xbmcgui.ListItem(label=title)
+                            list_item.setInfo(
+                                "video",
+                                {
+                                    "title": title,
+                                    "plot": description,
+                                    "duration": duration_sec,
+                                },
+                            )
+                            if image_url:
+                                list_item.setArt({"thumb": image_url, "poster": image_url, "fanart": image_url})
+
+                            # Set play progress / resume position for Kodi to display progress and prompt for resume
+                            if resume_seconds > 0 and duration_sec > 0:
+                                list_item.setProperty("ResumeTime", str(int(resume_seconds)))
+                                list_item.setProperty("TotalTime", str(int(duration_sec)))
+
+                            list_item.setProperty("inputstream", "inputstream.adaptive")
+                            list_item.setProperty("IsPlayable", "true")
+
+                            # Build Context Menu for Continue Watching item
+                            cw_url = rts.build_url(mode="remove_from_continue_watching", name=urn)
+                            pl_url = rts.build_url(mode="add_to_play_later", name=urn)
+                            list_item.addContextMenuItems([
+                                ("Add to Play Later", f"RunPlugin('{pl_url}')"),
+                                ("Remove from Continue Watching", f"RunPlugin('{cw_url}')")
+                            ])
+
+                            # Build the playable URL (mode=50 is the player, passing name=urn and title=title)
+                            play_url = rts.build_url(mode=50, name=urn, title=title)
+
+                            xbmcplugin.addDirectoryItem(int(sys.argv[1]), play_url, list_item, isFolder=False)
+                            count += 1
+                        except Exception as inner_e:
+                            log(f"Failed to process history item {urn}: {inner_e}", xbmc.LOGDEBUG)
+            except Exception as e:
+                log(f"Failed to build Continue Watching menu: {e}", xbmc.LOGERROR)
+    elif mode == 100:
+        RTSPlayTV().menu_builder.build_menu_by_urn(name)
+    elif mode == 200:
+        RTSPlayTV().menu_builder.build_homepage_menu()
+    elif mode == 90:
+        RTSPlayTV().build_livetv_menu(name)
+    elif mode == 1000:
+        RTSPlayTV().menu_builder.build_menu_apiv3(name, mode, page, page_hash)
+    elif mode == "login":
+        import os
+        from resources.lib.auth import RTSAuth
+        rts = RTSPlayTV()
+        auth = RTSAuth(rts.real_settings)
+        if os.path.exists(auth.session_file):
+            try:
+                os.remove(auth.session_file)
+            except Exception:
+                pass
+        try:
+            if auth.prompt_credentials_and_login():
+                xbmcgui.Dialog().ok(
+                    ADDON_NAME,
+                    rts.plugin_language(30083) or "Login successful."
+                )
+        except Exception as e:
+            xbmcgui.Dialog().ok(
+                ADDON_NAME,
+                f"{rts.plugin_language(30084) or 'Login failed.'}\nError: {e}"
+            )
+    elif mode == "play_later":
+        import time
+        import requests
+        import json
+        import re
+        rts = RTSPlayTV()
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(rts.real_settings)
+        cookies = auth.get_cookies()
+        if cookies:
+            url = "https://profil.rts.ch/api/playlist/v3/watch_later"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.rts.ch/"
+            }
+            try:
+                cb = int(time.time() * 1000)
+                res = requests.get(f"{url}?cb={cb}", headers=headers, cookies=cookies, timeout=10)
+                if res.ok:
+                    data = res.json()
+                    # PEACH Watch Later returns list under "bookmarks" key
+                    items = data.get("bookmarks") or data.get("items") or data.get("history") or data.get("data") or []
+                    seen_urns = set()
+                    count = 0
+                    for item in items:
+                        if count >= 50:
+                            break
+                        # PEACH Watch Later uses camelCase "itemId"
+                        urn = item.get("itemId") or item.get("item_id")
+                        if not urn:
+                            continue
+
+                        # Deduplicate: only process each unique URN once
+                        if urn in seen_urns:
+                            continue
+                        seen_urns.add(urn)
+
+                        # Fetch the metadata from the Integration Layer (guaranteed to contain colon)
+                        json_url = f"https://il.srgssr.ch/integrationlayer/2.0/mediaComposition/byUrn/{urn}.json"
 
                         try:
                             content = rts.open_url(json_url, use_cache=True, notify_on_error=False)
@@ -538,56 +972,126 @@ def run():
                             if image_url:
                                 list_item.setArt({"thumb": image_url, "poster": image_url, "fanart": image_url})
 
-                            # Set play progress / resume position for Kodi to display progress and prompt for resume
-                            if resume_seconds > 0 and duration_sec > 0:
-                                list_item.setProperty("ResumeTime", str(int(resume_seconds)))
-                                list_item.setProperty("TotalTime", str(int(duration_sec)))
-
                             list_item.setProperty("inputstream", "inputstream.adaptive")
                             list_item.setProperty("IsPlayable", "true")
 
-                            # Build the playable URL (mode=50 is the player, passing name=urn and title=title)
-                            play_url = rts.build_url(mode=50, name=urn, title=title)
+                            # Build Context Menu for Play Later item
+                            remove_url = rts.build_url(mode="remove_from_play_later", name=urn)
+                            list_item.addContextMenuItems([
+                                ("Remove from Play Later", f"RunPlugin('{remove_url}')")
+                            ])
 
+                            play_url = rts.build_url(mode=50, name=urn, title=title)
                             xbmcplugin.addDirectoryItem(int(sys.argv[1]), play_url, list_item, isFolder=False)
                             count += 1
                         except Exception as inner_e:
-                            log(f"Failed to process history item {urn}: {inner_e}", xbmc.LOGDEBUG)
+                            log(f"Failed to process play later item {urn}: {inner_e}", xbmc.LOGDEBUG)
             except Exception as e:
-                log(f"Failed to build Continue Watching menu: {e}", xbmc.LOGERROR)
-    elif mode == 100:
-        RTSPlayTV().menu_builder.build_menu_by_urn(name)
-    elif mode == 200:
-        RTSPlayTV().menu_builder.build_homepage_menu()
-    elif mode == 90:
-        RTSPlayTV().build_livetv_menu(name)
-    elif mode == 1000:
-        RTSPlayTV().menu_builder.build_menu_apiv3(name, mode, page, page_hash)
-    elif mode == "login":
-        import os
-        from resources.lib.auth import RTSAuth
+                log(f"Failed to build Play Later menu: {e}", xbmc.LOGERROR)
+    elif mode == "add_to_play_later":
+        import requests
         rts = RTSPlayTV()
+        from resources.lib.auth import RTSAuth
         auth = RTSAuth(rts.real_settings)
-        if os.path.exists(auth.session_file):
+        cookies = auth.get_cookies()
+        if cookies:
+            urn_val = name
+            if ":" not in urn_val:
+                urn_val = f"urn:rts:video:{urn_val}"
+            url = "https://profil.rts.ch/api/playlist/v3/watch_later/bookmarks"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Content-Type": "application/json",
+                "Referer": "https://www.rts.ch/"
+            }
             try:
-                os.remove(auth.session_file)
-            except Exception:
-                pass
-        try:
-            if auth.prompt_credentials_and_login():
-                xbmcgui.Dialog().ok(
-                    ADDON_NAME,
-                    rts.plugin_language(30083) or "Login successful."
-                )
-        except Exception as e:
-            xbmcgui.Dialog().ok(
-                ADDON_NAME,
-                f"{rts.plugin_language(30084) or 'Login failed.'}\nError: {e}"
-            )
+                payload = {"itemId": urn_val}
+                res = requests.post(url, json=payload, headers=headers, cookies=cookies, timeout=10)
+                if res.ok or res.status_code == 201:
+                    xbmcgui.Dialog().notification("RTS Play TV", "Added to Play Later", rts.icon, 3000)
+                    xbmc.executebuiltin("Container.Refresh")
+                else:
+                    xbmcgui.Dialog().notification("RTS Play TV", "Failed to add", rts.icon, 3000)
+            except Exception as e:
+                log(f"Failed to add to Play Later: {e}", xbmc.LOGERROR)
+    elif mode == "remove_from_play_later":
+        import requests
+        import time
+        rts = RTSPlayTV()
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(rts.real_settings)
+        cookies = auth.get_cookies()
+        if cookies:
+            urn_val = name
+            if ":" not in urn_val:
+                urn_val = f"urn:rts:video:{urn_val}"
+            url_get = "https://profil.rts.ch/api/playlist/v3/watch_later"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://www.rts.ch/"
+            }
+            try:
+                cb = int(time.time() * 1000)
+                res_get = requests.get(f"{url_get}?cb={cb}", headers=headers, cookies=cookies, timeout=10)
+                bookmark_id = None
+                if res_get.ok:
+                    data = res_get.json()
+                    bookmarks = data.get("bookmarks") or []
+                    for b in bookmarks:
+                        if b.get("itemId") == urn_val or b.get("item_id") == urn_val:
+                            bookmark_id = b.get("id")
+                            break
 
-    xbmcplugin.setContent(int(sys.argv[1]), CONTENT_TYPE)
-    xbmcplugin.addSortMethod(int(sys.argv[1]), xbmcplugin.SORT_METHOD_UNSORTED)
-    xbmcplugin.addSortMethod(int(sys.argv[1]), xbmcplugin.SORT_METHOD_NONE)
-    xbmcplugin.addSortMethod(int(sys.argv[1]), xbmcplugin.SORT_METHOD_LABEL)
-    xbmcplugin.addSortMethod(int(sys.argv[1]), xbmcplugin.SORT_METHOD_TITLE)
-    xbmcplugin.endOfDirectory(int(sys.argv[1]), cacheToDisc=True)
+                if bookmark_id is not None:
+                    url_delete = f"https://profil.rts.ch/api/playlist/v3/watch_later/bookmarks/{bookmark_id}"
+                    res_del = requests.delete(url_delete, headers=headers, cookies=cookies, timeout=10)
+                    if res_del.ok or res_del.status_code == 204:
+                        xbmcgui.Dialog().notification("RTS Play TV", "Removed from Play Later", rts.icon, 3000)
+                        xbmc.executebuiltin("Container.Refresh")
+                    else:
+                        xbmcgui.Dialog().notification("RTS Play TV", "Failed to remove", rts.icon, 3000)
+                else:
+                    xbmcgui.Dialog().notification("RTS Play TV", "Removed from Play Later", rts.icon, 3000)
+                    xbmc.executebuiltin("Container.Refresh")
+            except Exception as e:
+                log(f"Failed to remove from Play Later: {e}", xbmc.LOGERROR)
+    elif mode == "remove_from_continue_watching":
+        import requests
+        import time
+        rts = RTSPlayTV()
+        from resources.lib.auth import RTSAuth
+        auth = RTSAuth(rts.real_settings)
+        cookies = auth.get_cookies()
+        if cookies:
+            urn_val = name
+            if ":" not in urn_val:
+                urn_val = f"urn:rts:video:{urn_val}"
+            url = "https://profil.rts.ch/api/history/v2"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Content-Type": "application/json",
+                "Referer": "https://www.rts.ch/"
+            }
+            payload = {
+                "item_id": urn_val,
+                "deleted": True,
+                "date": int(time.time() * 1000)
+            }
+            try:
+                res = requests.post(url, json=payload, headers=headers, cookies=cookies, timeout=10)
+                if res.ok:
+                    xbmcgui.Dialog().notification("RTS Play TV", "Removed from Continue Watching", rts.icon, 3000)
+                    xbmc.executebuiltin("Container.Refresh")
+                else:
+                    xbmcgui.Dialog().notification("RTS Play TV", "Failed to remove", rts.icon, 3000)
+            except Exception as e:
+                log(f"Failed to remove from Continue Watching: {e}", xbmc.LOGERROR)
+
+    handle = int(sys.argv[1])
+    if handle >= 0:
+        xbmcplugin.setContent(handle, CONTENT_TYPE)
+        xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_UNSORTED)
+        xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_NONE)
+        xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_LABEL)
+        xbmcplugin.addSortMethod(handle, xbmcplugin.SORT_METHOD_TITLE)
+        xbmcplugin.endOfDirectory(handle, cacheToDisc=False)
