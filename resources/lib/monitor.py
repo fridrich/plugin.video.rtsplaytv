@@ -30,10 +30,8 @@ def clean_str(val):
 
 
 def b64_decode(val):
-    """Reverses the base64 encoding rtsplaytv.py applies before passing
-    arguments through RunScript(), which otherwise mangles titles/urns
-    containing quotes or apostrophes (Kodi's builtin-function argument
-    parser has its own quoting rules, independent of Python's).
+    """Reverses the base64 rtsplaytv.py applies before RunScript() --
+    plain quoting there breaks on titles with apostrophes.
     """
     try:
         return base64.b64decode(val).decode("utf-8")

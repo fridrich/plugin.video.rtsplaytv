@@ -48,6 +48,7 @@ class RTSMenuBuilder(MenuBuilder):
         MenuBuilder.__init__(self, srgssr_instance)
         self.play_later_urns = None
         self.continue_watching_urns = None
+        self.continue_watching_positions = None
         self.cookies = None
 
     def _load_user_lists(self):
@@ -56,13 +57,13 @@ class RTSMenuBuilder(MenuBuilder):
 
         self.play_later_urns = set()
         self.continue_watching_urns = set()
+        self.continue_watching_positions = {}
 
         from resources.lib.auth import RTSAuth
         auth = RTSAuth(self.srgssr.real_settings)
         cookies = auth.get_cookies()
-        # Cached for build_entry_apiv3/build_entry, called once per
-        # rendered item -- avoids re-instantiating RTSAuth and re-reading
-        # the cookie file from disk on every single video in a listing.
+        # Cached so build_entry/build_entry_apiv3 don't re-read cookies
+        # from disk per rendered item.
         self.cookies = cookies
         if not cookies:
             return
@@ -83,21 +84,10 @@ class RTSMenuBuilder(MenuBuilder):
             pass
 
         # 2. Fetch Continue Watching History
-        try:
-            cb = int(time.time() * 1000)
-            res = requests.get(f"https://profil.rts.ch/api/history/v2?cb={cb}", cookies=cookies, timeout=5)
-            if res.ok:
-                data = res.json()
-                items = data if isinstance(data, list) else (data.get("items") or data.get("history") or [])
-                for item in items:
-                    if item.get("deleted") is True:
-                        continue
-                    urn = item.get("item_id")
-                    if urn:
-                        raw_id = urn.split(":")[-1] if ":" in urn else urn
-                        self.continue_watching_urns.add(raw_id)
-        except Exception:
-            pass
+        self.continue_watching_positions = _fetch_continue_watching_positions(
+            cookies
+        )
+        self.continue_watching_urns = set(self.continue_watching_positions)
 
     def build_entry_apiv3(self, data, is_show=False, whitelist_ids=None):
         urn = data["urn"]
@@ -168,6 +158,15 @@ class RTSMenuBuilder(MenuBuilder):
         # Inject context menus conditionally
         if "video" in urn:
             self._load_user_lists()
+            raw_id = urn.split(":")[-1] if ":" in urn else urn
+
+            # Show resume progress everywhere the video appears, not just
+            # in Continue Watching -- matches the real website.
+            resume_seconds = self.continue_watching_positions.get(raw_id)
+            if resume_seconds and duration:
+                list_item.setProperty("ResumeTime", str(int(resume_seconds)))
+                list_item.setProperty("TotalTime", str(int(duration)))
+
             context_items = []
             if self.cookies:
                 if urn in self.play_later_urns:
@@ -179,7 +178,6 @@ class RTSMenuBuilder(MenuBuilder):
                     label = self.srgssr.plugin_language(30112) or "Add to Play Later"
                     context_items.append((label, f"RunPlugin('{add_url}')"))
 
-                raw_id = urn.split(":")[-1] if ":" in urn else urn
                 if raw_id in self.continue_watching_urns:
                     clear_url = self.srgssr.build_url(mode="remove_from_continue_watching", name=urn)
                     label = self.srgssr.plugin_language(30114) or "Remove from Continue Watching"
@@ -281,14 +279,28 @@ class RTSMenuBuilder(MenuBuilder):
             url = self.srgssr.build_url(mode=21, name=name)
         else:
             list_item.setProperty("IsPlayable", "true")
-            if urn and "swisstxt" in urn:
-                url = self.srgssr.build_url(mode=50, name=urn)
-            else:
-                url = self.srgssr.build_url(mode=50, name=name)
-
-        if not is_folder:
             context_urn = urn if urn else f"urn:rts:video:{name}"
             self._load_user_lists()
+            raw_id = (
+                context_urn.split(":")[-1]
+                if ":" in context_urn
+                else context_urn
+            )
+
+            # Show resume progress everywhere the video appears, not just
+            # in Continue Watching -- matches the real website.
+            resume_seconds = self.continue_watching_positions.get(raw_id)
+            if resume_seconds and duration:
+                list_item.setProperty("ResumeTime", str(int(resume_seconds)))
+                list_item.setProperty("TotalTime", str(int(duration)))
+
+            # Also pass resume to mode=50 -- the listitem property above
+            # only draws the progress bar, it doesn't make Kodi seek there.
+            play_name = urn if (urn and "swisstxt" in urn) else name
+            url = self.srgssr.build_url(
+                mode=50, name=play_name, resume=resume_seconds
+            )
+
             context_items = []
             if self.cookies:
                 if context_urn in self.play_later_urns:
@@ -300,7 +312,6 @@ class RTSMenuBuilder(MenuBuilder):
                     label = self.srgssr.plugin_language(30112) or "Add to Play Later"
                     context_items.append((label, f"RunPlugin('{add_url}')"))
 
-                raw_id = context_urn.split(":")[-1] if ":" in context_urn else context_urn
                 if raw_id in self.continue_watching_urns:
                     clear_url = self.srgssr.build_url(mode="remove_from_continue_watching", name=context_urn)
                     label = self.srgssr.plugin_language(30114) or "Remove from Continue Watching"
@@ -564,9 +575,8 @@ class RTSPlayTV(srgssr.SRGSSR):
                     urn = item.get("urn")
                     img_url = item.get("imageUrl")
 
-                    # cesimId, when present, is the real swisstxt asset id
-                    # and takes priority over the event's own uuid (which
-                    # doesn't resolve on its own for these events).
+                    # cesimId, if present, is the real swisstxt id -- the
+                    # event uuid alone doesn't resolve for these events.
                     cesim_id = item.get("cesimId")
                     if cesim_id:
                         urn = f"urn:swisstxt:video:rts:{cesim_id}"
@@ -662,6 +672,47 @@ def _fetch_il_chapter_metadata(rts, urn):
     return title, description, image_url, duration_sec
 
 
+def _fetch_continue_watching_positions(cookies):
+    """Returns {raw_id: last_playback_position} from /api/history/v2, so
+    any listing can show resume progress, not just Continue Watching.
+    Best-effort: returns {} on failure.
+    """
+    import time
+    import requests
+
+    positions = {}
+    try:
+        cb = int(time.time() * 1000)
+        res = requests.get(
+            f"https://profil.rts.ch/api/history/v2?cb={cb}",
+            cookies=cookies,
+            timeout=5,
+        )
+        if res.ok:
+            data = res.json()
+            items = (
+                data
+                if isinstance(data, list)
+                else (
+                    data.get("items")
+                    or data.get("history")
+                    or data.get("data")
+                    or []
+                )
+            )
+            for item in items:
+                if item.get("deleted") is True:
+                    continue
+                urn = item.get("item_id")
+                resume_seconds = item.get("last_playback_position")
+                if urn and resume_seconds is not None:
+                    raw_id = urn.split(":")[-1] if ":" in urn else urn
+                    positions[raw_id] = resume_seconds
+    except Exception as e:
+        log(f"Failed to fetch continue-watching positions: {e}", xbmc.LOGDEBUG)
+    return positions
+
+
 def run():
     """
     Run the plugin.
@@ -695,6 +746,10 @@ def run():
         title = unquote_plus(params["title"])
     except Exception:
         title = None
+    try:
+        resume = unquote_plus(params["resume"])
+    except Exception:
+        resume = None
 
     log("Mode: " + str(mode))
     log("URL : " + str(url))
@@ -790,17 +845,14 @@ def run():
         monitor_script = os.path.join(addon_path, "resources", "lib", "monitor.py")
 
         def b64(value):
-            # Base64 (alphanumeric + "+/=" only) survives Kodi's
-            # builtin-function argument parsing unscathed, unlike manual
-            # quote-escaping, which breaks on titles containing apostrophes
-            # (very common in French/Italian) and can silently mis-split
-            # the arguments, dropping progress reporting entirely.
+            # Base64 survives Kodi's builtin-arg parsing; manual quote-
+            # escaping breaks on apostrophes and can silently drop args.
             return base64.b64encode((value or "").encode("utf-8")).decode("ascii")
 
         xbmc.executebuiltin(
             f'RunScript("{monitor_script}", "{b64(name)}", "{b64(title)}", "{b64(cookies_path)}")'
         )
-        rts.player.play_video(name, title=title)
+        rts.player.play_video(name, title=title, resume=resume)
     elif mode == "continue_watching":
         import time
         import requests
@@ -883,7 +935,10 @@ def run():
                             ])
 
                             # Build the playable URL (mode=50 is the player, passing name=urn and title=title)
-                            play_url = rts.build_url(mode=50, name=urn, title=title)
+                            play_url = rts.build_url(
+                                mode=50, name=urn, title=title,
+                                resume=resume_seconds,
+                            )
 
                             xbmcplugin.addDirectoryItem(int(sys.argv[1]), play_url, list_item, isFolder=False)
                             count += 1
@@ -940,6 +995,9 @@ def run():
                     data = res.json()
                     # PEACH Watch Later returns list under "bookmarks" key
                     items = data.get("bookmarks") or data.get("items") or data.get("history") or data.get("data") or []
+                    # A Play Later item can have Continue Watching
+                    # progress too -- show it here as well.
+                    positions = _fetch_continue_watching_positions(cookies)
                     seen_urns = set()
                     count = 0
                     for item in items:
@@ -947,10 +1005,8 @@ def run():
                             break
                         # PEACH Watch Later uses camelCase "itemId"
                         urn = item.get("itemId") or item.get("item_id")
-                        # Unlike continue_watching's item_id, this isn't
-                        # confirmed to always be a full urn:... string --
-                        # guard the same way rather than building a
-                        # malformed IL url from a bare id.
+                        # Not confirmed to always be a full urn:... string
+                        # like continue_watching's item_id -- guard anyway.
                         if not urn or ":" not in urn:
                             continue
 
@@ -978,6 +1034,12 @@ def run():
                             if image_url:
                                 list_item.setArt({"thumb": image_url, "poster": image_url, "fanart": image_url})
 
+                            raw_id = urn.split(":")[-1] if ":" in urn else urn
+                            resume_seconds = positions.get(raw_id)
+                            if resume_seconds and duration_sec > 0:
+                                list_item.setProperty("ResumeTime", str(int(resume_seconds)))
+                                list_item.setProperty("TotalTime", str(int(duration_sec)))
+
                             list_item.setProperty("inputstream", "inputstream.adaptive")
                             list_item.setProperty("IsPlayable", "true")
 
@@ -987,7 +1049,10 @@ def run():
                                 (rts.plugin_language(30113) or "Remove from Play Later", f"RunPlugin('{remove_url}')")
                             ])
 
-                            play_url = rts.build_url(mode=50, name=urn, title=title)
+                            play_url = rts.build_url(
+                                mode=50, name=urn, title=title,
+                                resume=resume_seconds,
+                            )
                             xbmcplugin.addDirectoryItem(int(sys.argv[1]), play_url, list_item, isFolder=False)
                             count += 1
                         except Exception as inner_e:
@@ -1004,11 +1069,9 @@ def run():
             urn_val = name
             if ":" not in urn_val:
                 urn_val = f"urn:rts:video:{urn_val}"
-            # NOTE: only GET /api/playlist/v3/watch_later has ever been
-            # confirmed against a real capture. This POST endpoint, path,
-            # and "itemId" payload field are guessed by analogy with the
-            # history endpoint and have NOT been verified live -- if
-            # adding to Play Later doesn't actually work, check here first.
+            # NOTE: unverified -- only the GET listing is confirmed live;
+            # this POST endpoint/payload is guessed by analogy. Check here
+            # first if adding doesn't actually work.
             url = "https://profil.rts.ch/api/playlist/v3/watch_later/bookmarks"
             headers = {
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1040,9 +1103,7 @@ def run():
             urn_val = name
             if ":" not in urn_val:
                 urn_val = f"urn:rts:video:{urn_val}"
-            # NOTE: the DELETE endpoint/path below is guessed by analogy,
-            # same caveat as add_to_play_later -- only the GET listing is
-            # confirmed against a real capture.
+            # NOTE: unverified, same caveat as add_to_play_later.
             url_get = "https://profil.rts.ch/api/playlist/v3/watch_later"
             headers = {
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -1096,10 +1157,8 @@ def run():
                 "Content-Type": "application/json",
                 "Referer": "https://www.rts.ch/"
             }
-            # Full confirmed /api/history/v2 schema (item_id/
-            # last_playback_position/device_id/deleted/date) -- omitting
-            # fields the server may require alongside "deleted" risks a
-            # silently-ignored delete.
+            # Full confirmed schema -- a partial payload risks a silently
+            # ignored delete.
             payload = {
                 "item_id": urn_val,
                 "last_playback_position": 0,
