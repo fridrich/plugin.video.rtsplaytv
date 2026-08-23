@@ -145,3 +145,47 @@ msgstr "Login successful."
 msgctxt "#30084"
 msgid "Login failed. Check your email and password."
 msgstr "Login failed. Check your email and password."
+
+msgctxt "#30110"
+msgid "Continue Watching"
+msgstr "Continue Watching"
+
+msgctxt "#30111"
+msgid "Play Later"
+msgstr "Play Later"
+
+msgctxt "#30112"
+msgid "Add to Play Later"
+msgstr "Add to Play Later"
+
+msgctxt "#30113"
+msgid "Remove from Play Later"
+msgstr "Remove from Play Later"
+
+msgctxt "#30114"
+msgid "Remove from Continue Watching"
+msgstr "Remove from Continue Watching"
+
+msgctxt "#30115"
+msgid "Added to Play Later"
+msgstr "Added to Play Later"
+
+msgctxt "#30116"
+msgid "Failed to add to Play Later"
+msgstr "Failed to add to Play Later"
+
+msgctxt "#30117"
+msgid "Removed from Play Later"
+msgstr "Removed from Play Later"
+
+msgctxt "#30118"
+msgid "Failed to remove from Play Later"
+msgstr "Failed to remove from Play Later"
+
+msgctxt "#30119"
+msgid "Removed from Continue Watching"
+msgstr "Removed from Continue Watching"
+
+msgctxt "#30120"
+msgid "Failed to remove from Continue Watching"
+msgstr "Failed to remove from Continue Watching"

@@ -145,3 +145,47 @@ msgstr "Erfolgreich angemeldet."
 msgctxt "#30084"
 msgid "Login failed. Check your email and password."
 msgstr "Anmeldung fehlgeschlagen. Überprüfen Sie E-Mail und Passwort."
+
+msgctxt "#30110"
+msgid "Continue Watching"
+msgstr "Weiterschauen"
+
+msgctxt "#30111"
+msgid "Play Later"
+msgstr "Später ansehen"
+
+msgctxt "#30112"
+msgid "Add to Play Later"
+msgstr "Zu \"Später ansehen\" hinzufügen"
+
+msgctxt "#30113"
+msgid "Remove from Play Later"
+msgstr "Aus \"Später ansehen\" entfernen"
+
+msgctxt "#30114"
+msgid "Remove from Continue Watching"
+msgstr "Aus \"Weiterschauen\" entfernen"
+
+msgctxt "#30115"
+msgid "Added to Play Later"
+msgstr "Zu \"Später ansehen\" hinzugefügt"
+
+msgctxt "#30116"
+msgid "Failed to add to Play Later"
+msgstr "Hinzufügen zu \"Später ansehen\" fehlgeschlagen"
+
+msgctxt "#30117"
+msgid "Removed from Play Later"
+msgstr "Aus \"Später ansehen\" entfernt"
+
+msgctxt "#30118"
+msgid "Failed to remove from Play Later"
+msgstr "Entfernen aus \"Später ansehen\" fehlgeschlagen"
+
+msgctxt "#30119"
+msgid "Removed from Continue Watching"
+msgstr "Aus \"Weiterschauen\" entfernt"
+
+msgctxt "#30120"
+msgid "Failed to remove from Continue Watching"
+msgstr "Entfernen aus \"Weiterschauen\" fehlgeschlagen"

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 # Copyright (C) 2026 Fridrich Strba
 #
 # Standalone CLI tool to generate RTS (MaRTS) session cookies on a PC.

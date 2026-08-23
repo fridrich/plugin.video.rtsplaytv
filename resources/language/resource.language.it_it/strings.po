@@ -134,3 +134,47 @@ msgstr "Accesso eseguito con successo."
 msgctxt "#30084"
 msgid "Login failed. Check your email and password."
 msgstr "Accesso fallito. Verifica email e password."
+
+msgctxt "#30110"
+msgid "Continue Watching"
+msgstr "Continua a guardare"
+
+msgctxt "#30111"
+msgid "Play Later"
+msgstr "Guarda più tardi"
+
+msgctxt "#30112"
+msgid "Add to Play Later"
+msgstr "Aggiungi a \"Guarda più tardi\""
+
+msgctxt "#30113"
+msgid "Remove from Play Later"
+msgstr "Rimuovi da \"Guarda più tardi\""
+
+msgctxt "#30114"
+msgid "Remove from Continue Watching"
+msgstr "Rimuovi da \"Continua a guardare\""
+
+msgctxt "#30115"
+msgid "Added to Play Later"
+msgstr "Aggiunto a \"Guarda più tardi\""
+
+msgctxt "#30116"
+msgid "Failed to add to Play Later"
+msgstr "Impossibile aggiungere a \"Guarda più tardi\""
+
+msgctxt "#30117"
+msgid "Removed from Play Later"
+msgstr "Rimosso da \"Guarda più tardi\""
+
+msgctxt "#30118"
+msgid "Failed to remove from Play Later"
+msgstr "Impossibile rimuovere da \"Guarda più tardi\""
+
+msgctxt "#30119"
+msgid "Removed from Continue Watching"
+msgstr "Rimosso da \"Continua a guardare\""
+
+msgctxt "#30120"
+msgid "Failed to remove from Continue Watching"
+msgstr "Impossibile rimuovere da \"Continua a guardare\""
