@@ -145,3 +145,47 @@ msgstr "Connexion réussie."
 msgctxt "#30084"
 msgid "Login failed. Check your email and password."
 msgstr "Échec de connexion. Vérifiez votre adresse courriel et votre mot de passe."
+
+msgctxt "#30110"
+msgid "Continue Watching"
+msgstr "Reprendre la lecture"
+
+msgctxt "#30111"
+msgid "Play Later"
+msgstr "À regarder plus tard"
+
+msgctxt "#30112"
+msgid "Add to Play Later"
+msgstr "Ajouter à « À regarder plus tard »"
+
+msgctxt "#30113"
+msgid "Remove from Play Later"
+msgstr "Retirer de « À regarder plus tard »"
+
+msgctxt "#30114"
+msgid "Remove from Continue Watching"
+msgstr "Retirer de « Reprendre la lecture »"
+
+msgctxt "#30115"
+msgid "Added to Play Later"
+msgstr "Ajouté à « À regarder plus tard »"
+
+msgctxt "#30116"
+msgid "Failed to add to Play Later"
+msgstr "Échec de l'ajout à « À regarder plus tard »"
+
+msgctxt "#30117"
+msgid "Removed from Play Later"
+msgstr "Retiré de « À regarder plus tard »"
+
+msgctxt "#30118"
+msgid "Failed to remove from Play Later"
+msgstr "Échec du retrait de « À regarder plus tard »"
+
+msgctxt "#30119"
+msgid "Removed from Continue Watching"
+msgstr "Retiré de « Reprendre la lecture »"
+
+msgctxt "#30120"
+msgid "Failed to remove from Continue Watching"
+msgstr "Échec du retrait de « Reprendre la lecture »"

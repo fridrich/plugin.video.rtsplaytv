@@ -7,6 +7,7 @@
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 
+import base64
 import os
 import sys
 import time
@@ -16,6 +17,28 @@ import xbmc
 # Insert resources/lib into path to import auth.py
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lib"))
 from auth import RTSAuth
+
+
+def clean_str(val):
+    """Strips null bytes and whitespace from strings returned by Kodi's
+    C++ bindings (a real crash seen before in plugin.video.playsuisse's
+    equivalent monitor).
+    """
+    if isinstance(val, str):
+        return val.replace("\x00", "").replace("\0", "").strip()
+    return val
+
+
+def b64_decode(val):
+    """Reverses the base64 encoding rtsplaytv.py applies before passing
+    arguments through RunScript(), which otherwise mangles titles/urns
+    containing quotes or apostrophes (Kodi's builtin-function argument
+    parser has its own quoting rules, independent of Python's).
+    """
+    try:
+        return base64.b64decode(val).decode("utf-8")
+    except Exception:
+        return val
 
 
 class RTSPlaybackMonitor(xbmc.Player):
@@ -83,9 +106,9 @@ def main():
     if len(sys.argv) < 4:
         xbmc.log("RTSPlaybackMonitor: Missing arguments. Expected URN, Title, and Cookies Path.", xbmc.LOGERROR)
         return
-    urn = sys.argv[1]
-    title = sys.argv[2]
-    cookies_path = sys.argv[3]
+    urn = clean_str(b64_decode(sys.argv[1]))
+    title = clean_str(b64_decode(sys.argv[2]))
+    cookies_path = clean_str(b64_decode(sys.argv[3]))
 
     xbmc.log(f"RTSPlaybackMonitor: Starting for {urn} ({title})", xbmc.LOGINFO)
     xbmc.log(f"RTSPlaybackMonitor: Cookies path: {cookies_path}", xbmc.LOGDEBUG)
