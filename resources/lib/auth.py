@@ -39,6 +39,14 @@ class RTSAuth:
 
     LOGIN_URL = "https://www.rts.ch/profile/login/?redirect=https://www.rts.ch/"
 
+    IMPERSONATE_TARGETS = ("chrome120", "chrome124", "edge101", "safari180")
+    # Fallback UA, used only when no curl_cffi target is available at all
+    # (plain requests.Session() has no impersonation of its own).
+    FALLBACK_USER_AGENT = (
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
     def __init__(self, addon=None, session_file=None):
         self.addon = addon
         if session_file:
@@ -118,28 +126,41 @@ class RTSAuth:
             except Exception:
                 pass
 
-        if curl_requests:
-            log_msg("Detected curl_cffi library! Using Chrome 120 impersonation...")
-            session = curl_requests.Session(impersonate="chrome120")
-        else:
-            log_msg("Using standard requests library...")
-            session = requests.Session()
-
-        # Plain 2-arg set(), not .update(cookie_jar) -- that's a
-        # requests-specific extension curl_cffi may not have.
-        for cookie in cookie_jar:
-            session.cookies.set(cookie.name, cookie.value)
-
         headers = {
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
         }
-        session.headers.update(headers)
 
-        # Step 1: GET login page to obtain request_identifier, request_date and initial cookies
+        def prep_session(candidate):
+            # Plain 2-arg set(), not .update(cookie_jar) -- that's a
+            # requests-specific extension curl_cffi may not have.
+            for cookie in cookie_jar:
+                candidate.cookies.set(cookie.name, cookie.value)
+            candidate.headers.update(headers)
+            return candidate
+
+        # Step 1: GET login page to obtain request_identifier, request_date
+        # and initial cookies. Impersonation target-fallback loop wraps this
+        # specific request (not just Session construction) -- ImpersonateError
+        # only surfaces on first real use of a target, never at construction.
         log_msg("Step 1: Contacting login server (GET)...")
-        res = session.get(self.LOGIN_URL, timeout=15)
+        session = None
+        res = None
+        for target in self.IMPERSONATE_TARGETS if curl_requests else ():
+            log_msg(f"Trying to impersonate {target}")
+            try:
+                candidate = prep_session(curl_requests.Session(impersonate=target))
+                res = candidate.get(self.LOGIN_URL, timeout=15)
+                session = candidate
+                break
+            except Exception as e:
+                log_msg(f"{target} failed: {e}")
+                continue
+        if session is None:
+            log_msg("Using standard requests library...")
+            session = prep_session(requests.Session())
+            session.headers["User-Agent"] = self.FALLBACK_USER_AGENT
+            res = session.get(self.LOGIN_URL, timeout=15)
         if not res.ok:
             raise Exception("FAILED_GET_LOGIN_PAGE")
 
