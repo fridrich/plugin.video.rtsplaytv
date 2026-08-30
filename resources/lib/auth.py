@@ -214,9 +214,9 @@ class RTSAuth:
                 raise Exception("PASSWORD_INVALID")
             raise Exception("LOGIN_FAILED")
 
-        # Save all cookies to LWPCookieJar
+        # curl_cffi's Cookies.__iter__ yields names, not Cookie objects -- use .jar.
         cookie_jar.clear()
-        for cookie in session.cookies:
+        for cookie in getattr(session.cookies, "jar", session.cookies):
             cookie_jar.set_cookie(cookie)
 
         cookie_jar.save(ignore_discard=True, ignore_expires=True)
