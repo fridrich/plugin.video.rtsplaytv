@@ -10,6 +10,7 @@
 import http.cookiejar
 import os
 import re
+import sys
 import requests
 
 try:
@@ -21,6 +22,9 @@ try:
 except ImportError:
     KODI_AVAILABLE = False
 
+# orjson (curl_cffi's optional dep) segfaults on 2nd+ import in a Kodi
+# sub-interpreter -- force curl_cffi's own fallback to skip it entirely.
+sys.modules.setdefault("orjson", None)
 try:
     from curl_cffi import requests as curl_requests
 except ImportError:
